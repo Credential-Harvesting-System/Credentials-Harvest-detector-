@@ -19,7 +19,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	device := devices[4].Name // ✅ your working Wi-Fi adapter
+	device := devices[4].Name 
 
 	handle, err := pcap.OpenLive(device, 1600, true, pcap.BlockForever)
 	if err != nil {
