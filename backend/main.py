@@ -89,8 +89,10 @@ def calculate_score(event):
         score += 3
         reason.append("POST request detected")
 
-    suspicious_keywords = ["login", "secure", "verify", "update"]
-
+    suspicious_keywords = [
+    "login", "secure", "verify", "update",
+    "account", "bank", "payment", "confirm"
+]
     for word in suspicious_keywords:
         if word in event.domain.lower():
             score += 2
@@ -98,7 +100,7 @@ def calculate_score(event):
 
     entropy = calculate_entropy(event.domain)
 
-    if entropy > 3.5:
+    if entropy > 4.2:
         score += 2
         reason.append("High domain entropy detected")
 
