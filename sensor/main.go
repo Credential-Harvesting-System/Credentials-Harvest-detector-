@@ -19,12 +19,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-<<<<<<< HEAD
-	device := devices[4].Name 
-
-=======
 	device := devices[3].Name
->>>>>>> 11aaef2 (changes in main.go)
+
 	handle, err := pcap.OpenLive(device, 1600, true, pcap.BlockForever)
 	if err != nil {
 		log.Fatal(err)

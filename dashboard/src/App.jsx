@@ -7,6 +7,7 @@ function App() {
     try {
       const res = await fetch("http://127.0.0.1:8000/api/alerts");
       const data = await res.json();
+      console.log("🔥 FRONTEND RECEIVED:", data);
       setAlerts(data);
     } catch (error) {
       console.error("Error fetching alerts:", error);

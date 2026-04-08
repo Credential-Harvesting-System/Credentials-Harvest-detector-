@@ -1,70 +1,21 @@
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 from pydantic import BaseModel
-import psycopg2
-import os
+from typing import List
 import numpy as np
-import math
-from sklearn.ensemble import IsolationForest
-from fastapi.middleware.cors import CORSMiddleware
-
-# ---------------- APP INITIALIZATION ----------------
 
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # allow frontend
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---------------- DATABASE CONNECTION ----------------
-
-conn = psycopg2.connect(
-    database="cred_detect",
-    user="postgres",
-    password=os.getenv("DB_PASSWORD"),
-    host="localhost",
-    port="5432"
-)
-
-cursor = conn.cursor()
-
-# Create EVENTS table
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS events (
-    id SERIAL PRIMARY KEY,
-    timestamp VARCHAR(100),
-    source_ip VARCHAR(50),
-    destination_ip VARCHAR(50),
-    domain VARCHAR(255),
-    method VARCHAR(10)
-);
-""")
-
-# Create ALERTS table
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS alerts (
-    id SERIAL PRIMARY KEY,
-    timestamp VARCHAR(100),
-    domain VARCHAR(255),
-    score INTEGER,
-    reason VARCHAR(255)
-);
-""")
-
-conn.commit()
-
-# ---------------- AI MODEL SETUP ----------------
-
-model = IsolationForest(contamination=0.1)
-MODEL_TRAINED = False
-EVENT_COUNTER = 0
-RETRAIN_THRESHOLD = 20  # retrain every 20 events
-
-# ---------------- DATA MODEL ----------------
-
+# -----------------------------
+# DATA MODEL
+# -----------------------------
 class Event(BaseModel):
     timestamp: str
     source_ip: str
@@ -72,185 +23,98 @@ class Event(BaseModel):
     domain: str
     method: str
 
-# ---------------- ENTROPY CALCULATION ----------------
+# -----------------------------
+# IN-MEMORY STORAGE (NO DB)
+# -----------------------------
+alerts_data = []
 
-def calculate_entropy(domain):
-    probability = [float(domain.count(c)) / len(domain) for c in dict.fromkeys(list(domain))]
-    entropy = - sum([p * math.log2(p) for p in probability])
-    return entropy
+# -----------------------------
+# SIMPLE FEATURE EXTRACTOR
+# -----------------------------
+def extract_features(domain: str):
+    return [
+        len(domain),
+        domain.count('-'),
+        domain.count('.'),
+        int(any(word in domain for word in ["login", "verify", "secure", "account", "update"]))
+    ]
 
-# ---------------- RULE-BASED SCORING ----------------
-
-def calculate_score(event):
+# -----------------------------
+# SIMPLE DETECTION LOGIC
+# -----------------------------
+def detect_phishing(domain: str):
     score = 0
-    reason = []
 
-    if event.method.upper() == "POST":
-        score += 3
-        reason.append("POST request detected")
+    # suspicious keywords
+    if any(word in domain for word in ["login", "verify", "secure", "account", "update"]):
+        score += 40
 
-    suspicious_keywords = [
-    "login", "secure", "verify", "update",
-    "account", "bank", "payment", "confirm"
-]
-    for word in suspicious_keywords:
-        if word in event.domain.lower():
-            score += 2
-            reason.append(f"Suspicious keyword: {word}")
+    # too many hyphens
+    if domain.count('-') > 2:
+        score += 20
 
-    entropy = calculate_entropy(event.domain)
+    # long domain
+    if len(domain) > 25:
+        score += 20
 
-    if entropy > 4.2:
-        score += 2
-        reason.append("High domain entropy detected")
+    # fake words
+    if "fake" in domain or "phish" in domain:
+        score += 30
 
-    return score, ", ".join(reason)
-
-# ---------------- FEATURE EXTRACTION ----------------
-
-def extract_features(domain, method):
-    method_flag = 1 if method.upper() == "POST" else 0
-    domain_length = len(domain)
-    suspicious_word_count = sum(
-        word in domain.lower()
-        for word in ["login", "secure", "verify", "update"]
-    )
-    entropy = calculate_entropy(domain)
-
-    return [method_flag, suspicious_word_count, domain_length, entropy]
-
-# ---------------- ADAPTIVE MODEL TRAINING ----------------
-
-def train_model_from_db():
-    global MODEL_TRAINED
-
-    cursor.execute("""
-        SELECT domain, method
-        FROM events
-        ORDER BY id DESC
-        LIMIT 200;
-    """)
-
-    rows = cursor.fetchall()
-    feature_list = []
-
-    for domain, method in rows:
-        features = extract_features(domain, method)
-        feature_list.append(features)
-
-    if len(feature_list) > 30:
-        model.fit(np.array(feature_list))
-        MODEL_TRAINED = True
-        print("Model trained successfully.")
+    # final risk
+    if score >= 60:
+        risk = "CRITICAL"
+    elif score >= 30:
+        risk = "MEDIUM"
     else:
-        print("Not enough data to train model.")
+        risk = "LOW"
 
-# ---------------- STARTUP TRAINING ----------------
+    return score, risk
 
-@app.on_event("startup")
-def startup_training():
-    print("Training model on startup...")
-    train_model_from_db()
-    print("Startup training completed.")
-
-# ---------------- RISK CLASSIFICATION ----------------
-
-def classify_risk(score):
-    if score >= 12:
-        return "CRITICAL"
-    elif score >= 8:
-        return "HIGH"
-    elif score >= 5:
-        return "MEDIUM"
-    else:
-        return "LOW"
-
-# ---------------- ROOT ENDPOINT ----------------
-
+# -----------------------------
+# ROOT CHECK
+# -----------------------------
 @app.get("/")
 def home():
-    return {"message": "AI-Driven Credential Harvesting Detection Engine Running"}
+    return {"message": "Backend running 🚀"}
 
-# ---------------- MAIN EVENT INGESTION ----------------
-
+# -----------------------------
+# RECEIVE EVENT FROM EXTENSION
+# -----------------------------
 @app.post("/api/events")
 def receive_event(event: Event):
+    print("📥 Received:", event.domain)
 
-    global EVENT_COUNTER
+    try:
+        score, risk = detect_phishing(event.domain)
 
-    # Store event
-    cursor.execute("""
-        INSERT INTO events (timestamp, source_ip, destination_ip, domain, method)
-        VALUES (%s, %s, %s, %s, %s)
-    """, (
-        event.timestamp,
-        event.source_ip,
-        event.destination_ip,
-        event.domain,
-        event.method
-    ))
-    conn.commit()
+        alert = {
+            "id": len(alerts_data) + 1,
+            "timestamp": event.timestamp,
+            "domain": event.domain,
+            "score": score,
+            "risk": risk,
+            "reason": "Suspicious pattern detected" if risk != "LOW" else "Normal traffic"
+        }
 
-    EVENT_COUNTER += 1
+        alerts_data.append(alert)
 
-    # Periodic retraining
-    if EVENT_COUNTER % RETRAIN_THRESHOLD == 0:
-        train_model_from_db()
+        return {
+            "status": "processed",
+            "alert": alert
+        }
 
-    # Rule scoring
-    rule_score, reason = calculate_score(event)
+    except Exception as e:
+        print("❌ Error:", e)
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
-    # AI scoring
-    ai_score = 0
-
-    if MODEL_TRAINED:
-        features = np.array([extract_features(event.domain, event.method)])
-        prediction = model.predict(features)
-
-        if prediction[0] == -1:
-            ai_score = 3
-
-    final_score = rule_score + ai_score
-    risk_level = classify_risk(final_score)
-
-    # Alert generation
-    if final_score >= 5:
-        cursor.execute("""
-            INSERT INTO alerts (timestamp, domain, score, reason)
-            VALUES (%s, %s, %s, %s)
-        """, (
-            event.timestamp,
-            event.domain,
-            final_score,
-            reason
-        ))
-        conn.commit()
-
-    return {
-        "rule_score": rule_score,
-        "ai_score": ai_score,
-        "final_score": final_score,
-        "risk_level": risk_level,
-        "alert_generated": final_score >= 5,
-        "model_trained": MODEL_TRAINED
-    }
-
-# ---------------- ALERT FETCH ENDPOINT ----------------
-
+# -----------------------------
+# GET ALERTS FOR DASHBOARD
+# -----------------------------
 @app.get("/api/alerts")
 def get_alerts():
-    cursor.execute("SELECT * FROM alerts ORDER BY id DESC;")
-    rows = cursor.fetchall()
-
-    alerts = []
-
-    for row in rows:
-        alerts.append({
-            "id": row[0],
-            "timestamp": row[1],
-            "domain": row[2],
-            "score": row[3],
-            "reason": row[4]
-        })
-
-    return alerts
+    print("📤 Sending alerts:", alerts_data)  # DEBUG
+    return list(reversed(alerts_data))
