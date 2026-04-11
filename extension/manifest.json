@@ -2,15 +2,21 @@
   "manifest_version": 3,
   "name": "Credential Harvest Detector",
   "version": "1.0",
-  "permissions": ["tabs", "activeTab", "scripting"],
-  "host_permissions": ["http://127.0.0.1:8000/*"],
+  "description": "Warns when a visited site is flagged as critical risk.",
+  "permissions": ["tabs", "scripting"],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "http://*/*",
+    "https://*/*"
+  ],
   "background": {
-    "service_worker": "background.js",
-    "content_scripts": [
-  {
-    "matches": ["<all_urls>"],
-    "js": ["content.js"]
-  }
-]
-  }
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
 }

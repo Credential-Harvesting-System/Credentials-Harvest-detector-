@@ -1,88 +1,87 @@
-// STEP 1: Get current domain
-const domain = window.location.hostname;
+const OVERLAY_ID = "cred-harvest-warning-overlay";
 
-// STEP 2: Send to backend
-fetch("http://localhost:8000/api/check-domain", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json"
-  },
-  body: JSON.stringify({ domain: domain })
-})
-.then(res => res.json())
-.then(data => {
-  console.log("Backend response:", data);
+function showCriticalWarning(detail) {
+  if (document.getElementById(OVERLAY_ID)) return;
 
-  if (data.risk_level === "HIGH") {
-    showWarning();
-  }
-})
-.catch(err => console.log("Error:", err));
-
-
-// STEP 3: Warning overlay function
-function showWarning() {
   const overlay = document.createElement("div");
+  overlay.id = OVERLAY_ID;
+  overlay.setAttribute("role", "alertdialog");
+  overlay.setAttribute("aria-modal", "true");
 
-  overlay.innerHTML = `
-    <div style="
-      position:fixed;
-      top:0; left:0;
-      width:100%; height:100%;
-      background:rgba(0,0,0,0.95);
-      color:white;
-      z-index:9999;
-      display:flex;
-      justify-content:center;
-      align-items:center;
-      flex-direction:column;
-      text-align:center;
-    ">
-      <h1>⚠️ WARNING</h1>
-      <p>This site may be trying to steal your credentials</p>
-      <p><b>Domain:</b> ${window.location.hostname}</p>
+  const panel = document.createElement("div");
+  panel.style.cssText = [
+    "position:fixed",
+    "top:0;left:0",
+    "width:100%;height:100%",
+    "background:rgba(15,23,42,0.97)",
+    "color:#f8fafc",
+    "z-index:2147483647",
+    "display:flex",
+    "justify-content:center",
+    "align-items:center",
+    "flex-direction:column",
+    "text-align:center",
+    "font-family:system-ui,-apple-system,sans-serif",
+    "padding:24px",
+    "box-sizing:border-box"
+  ].join(";");
 
-      <button style="
-        padding:10px 20px;
-        margin:10px;
-        background:red;
-        color:white;
-        border:none;
-        cursor:pointer;
-      " onclick="window.history.back()">
-        Go Back
-      </button>
+  const title = document.createElement("h1");
+  title.textContent = "Critical risk warning";
+  title.style.cssText = "margin:0 0 12px;font-size:1.5rem;";
 
-      <button style="
-        padding:10px 20px;
-        margin:10px;
-        background:gray;
-        color:white;
-        border:none;
-        cursor:pointer;
-      " onclick="this.parentElement.parentElement.remove()">
-        Continue Anyway
-      </button>
-    </div>
-  `;
+  const line1 = document.createElement("p");
+  line1.style.margin = "8px 0";
+  line1.textContent =
+    "This site was flagged as critical. It may try to steal credentials or mislead you.";
 
-  document.body.appendChild(overlay);
+  const line2 = document.createElement("p");
+  line2.style.margin = "8px 0";
+  line2.style.fontSize = "0.95rem";
+  line2.style.opacity = "0.9";
+
+  const domain = detail.domain || window.location.hostname;
+  const score = detail.score != null ? String(detail.score) : "—";
+  const reason = detail.reason || "";
+  line2.textContent = `Domain: ${domain} · Score: ${score}${reason ? ` · ${reason}` : ""}`;
+
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "margin-top:20px;display:flex;gap:12px;flex-wrap:wrap;justify-content:center";
+
+  const backBtn = document.createElement("button");
+  backBtn.type = "button";
+  backBtn.textContent = "Go back";
+  backBtn.style.cssText =
+    "padding:10px 20px;background:#dc2626;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600";
+  backBtn.addEventListener("click", () => window.history.back());
+
+  const dismissBtn = document.createElement("button");
+  dismissBtn.type = "button";
+  dismissBtn.textContent = "I understand — continue";
+  dismissBtn.style.cssText =
+    "padding:10px 20px;background:#475569;color:#fff;border:none;border-radius:8px;cursor:pointer";
+  dismissBtn.addEventListener("click", () => overlay.remove());
+
+  btnRow.append(backBtn, dismissBtn);
+  panel.append(title, line1, line2, btnRow);
+  overlay.appendChild(panel);
+
+  if (document.body) {
+    document.body.appendChild(overlay);
+  } else {
+    document.documentElement.appendChild(overlay);
+  }
 }
 
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "CRITICAL_SITE") {
+    showCriticalWarning(message);
+    sendResponse({ ok: true });
+    return true;
+  }
   if (message.type === "PHISHING_ALERT") {
-    const banner = document.createElement("div");
-    banner.innerText = "⚠️ WARNING: Suspicious Website!";
-    banner.style.position = "fixed";
-    banner.style.top = "0";
-    banner.style.left = "0";
-    banner.style.width = "100%";
-    banner.style.background = "red";
-    banner.style.color = "white";
-    banner.style.padding = "10px";
-    banner.style.zIndex = "9999";
-    banner.style.textAlign = "center";
-
-    document.body.prepend(banner);
+    showCriticalWarning({ domain: window.location.hostname, reason: "Suspicious website" });
+    sendResponse({ ok: true });
+    return true;
   }
 });

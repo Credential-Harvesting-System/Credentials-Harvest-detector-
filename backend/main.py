@@ -62,7 +62,8 @@ def detect_phishing(domain: str):
         score += 30
 
     # final risk
-    if score >= 60:
+    # Treat only very strong signals as CRITICAL
+    if score >= 70:
         risk = "CRITICAL"
     elif score >= 30:
         risk = "MEDIUM"
