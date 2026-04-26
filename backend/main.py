@@ -1,13 +1,18 @@
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import List
-import numpy as np
+from joblib import load
+from ml.features import extract_features
+import json
+
+model = load("ml/model.joblib")
 
 app = FastAPI()
+
+# ✅ CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # allow frontend
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -23,99 +28,76 @@ class Event(BaseModel):
     domain: str
     method: str
 
+    hasPassword: bool = False
+    externalAction: bool = False
+    hiddenCount: int = 0
+    loginKeywords: bool = False
+    noHTTPS: bool = False
+
+
 # -----------------------------
-# IN-MEMORY STORAGE (NO DB)
+# STORAGE
 # -----------------------------
 alerts_data = []
 
-# -----------------------------
-# SIMPLE FEATURE EXTRACTOR
-# -----------------------------
-def extract_features(domain: str):
-    return [
-        len(domain),
-        domain.count('-'),
-        domain.count('.'),
-        int(any(word in domain for word in ["login", "verify", "secure", "account", "update"]))
-    ]
 
 # -----------------------------
-# SIMPLE DETECTION LOGIC
+# DETECTION LOGIC
 # -----------------------------
-def detect_phishing(domain: str):
-    score = 0
+def detect(event: Event):
 
-    # suspicious keywords
-    if any(word in domain for word in ["login", "verify", "secure", "account", "update"]):
-        score += 40
+    # RULE-BASED (your current logic)
+    if event.hasPassword and event.externalAction:
+        return 100, "CRITICAL", "Credential harvesting attack detected"
 
-    # too many hyphens
-    if domain.count('-') > 2:
-        score += 20
+    # ML PREDICTION
+    features = extract_features("http://" + event.domain)
+    prediction = model.predict([features])[0]
 
-    # long domain
-    if len(domain) > 25:
-        score += 20
+    if prediction == 1:
+        return 70, "MEDIUM", "ML detected suspicious URL"
 
-    # fake words
-    if "fake" in domain or "phish" in domain:
-        score += 30
+    return 10, "LOW", "Normal traffic"
 
-    # final risk
-    # Treat only very strong signals as CRITICAL
-    if score >= 70:
-        risk = "CRITICAL"
-    elif score >= 30:
-        risk = "MEDIUM"
-    else:
-        risk = "LOW"
-
-    return score, risk
 
 # -----------------------------
-# ROOT CHECK
+# ROOT
 # -----------------------------
 @app.get("/")
 def home():
     return {"message": "Backend running 🚀"}
 
+
 # -----------------------------
-# RECEIVE EVENT FROM EXTENSION
+# RECEIVE EVENT
 # -----------------------------
 @app.post("/api/events")
 def receive_event(event: Event):
-    print("📥 Received:", event.domain)
 
-    try:
-        score, risk = detect_phishing(event.domain)
+    print("📥 Received:", event)
 
-        alert = {
-            "id": len(alerts_data) + 1,
-            "timestamp": event.timestamp,
-            "domain": event.domain,
-            "score": score,
-            "risk": risk,
-            "reason": "Suspicious pattern detected" if risk != "LOW" else "Normal traffic"
-        }
+    score, risk, reason = detect(event)
 
-        alerts_data.append(alert)
+    alert = {
+        "id": len(alerts_data) + 1,
+        "timestamp": event.timestamp,
+        "domain": event.domain,
+        "score": score,
+        "risk": risk,
+        "reason": reason
+    }
 
-        return {
-            "status": "processed",
-            "alert": alert
-        }
+    alerts_data.append(alert)
+    with open("predictions_log.jsonl", "a") as f:
+        f.write(json.dumps(alert) + "\n")
 
-    except Exception as e:
-        print("❌ Error:", e)
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+    return {"status": "processed", "alert": alert}
+
 
 # -----------------------------
-# GET ALERTS FOR DASHBOARD
+# SEND ALERTS
 # -----------------------------
 @app.get("/api/alerts")
 def get_alerts():
-    print("📤 Sending alerts:", alerts_data)  # DEBUG
+    print("📤 Sending alerts:", alerts_data)
     return list(reversed(alerts_data))
